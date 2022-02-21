@@ -72,12 +72,21 @@ def world_encode_data(wave, fs, frame_period=5.0, coded_dim=24):
     return f0s, timeaxes, sps, aps, coded_sps
 
 
-def logf0_statistics(f0s):
-    # Note: np.ma.log() calculating log on masked array (for incomplete or invalid entries in array)
-    log_f0s_concatenated = np.ma.log(np.concatenate(f0s))
+def logf0_statistics(logf0s):
+    # Note: np.ma.log() calculating log on masked array
+    # (for incomplete or invalid entries in array)
+    log_f0s_concatenated = np.concatenate(logf0s)
     log_f0s_mean = log_f0s_concatenated.mean()
     log_f0s_std = log_f0s_concatenated.std()
     return log_f0s_mean, log_f0s_std
+
+
+def logf0(f0s):
+    return [np.log(x + 1) for x in f0s]
+
+
+def normalize_logf0s(logf0s, logf0s_mean, logf0s_std):
+    return [(x - logf0s_mean) / logf0s_std for x in logf0s]
 
 
 def transpose_in_list(lst):
@@ -163,36 +172,3 @@ def sample_train_data(dataset_A, dataset_B, n_frames=128):
     train_data_B = np.array(train_data_B)
 
     return train_data_A, train_data_B
-
-
-if __name__ == '__main__':
-    start_time = time.time()
-    wavs = load_wavs("../data/vcc2016_training/SF1/", 16000)
-    # pprint(wavs)
-
-    f0, timeaxis, sp, ap = world_decompose(wavs[0], 16000, 5.0)
-    print(f0.shape, timeaxis.shape, sp.shape, ap.shape)
-
-    coded_sp = world_encode_spectral_envelop(sp, 16000, 24)
-    print(coded_sp.shape)
-
-    f0s, timeaxes, sps, aps, coded_sps = world_encode_data(wavs, 16000, 5, 24)
-    # print(f0s)
-
-    log_f0_mean, log_f0_std = logf0_statistics(f0s)
-    # print(log_f0_mean)
-
-    coded_sps_transposed = transpose_in_list(lst=coded_sps)
-    # print(coded_sps_transposed)
-
-    coded_sps_norm, coded_sps_mean, coded_sps_std = coded_sps_normalization_fit_transform(
-        coded_sps=coded_sps_transposed)
-    print(
-        "Total time for preprcessing-> {:.4f}".format(time.time() - start_time))
-
-    print(len(coded_sps_norm), coded_sps_norm[0].shape)
-    temp_A = np.random.randn(162, 24, 550)
-    temp_B = np.random.randn(158, 24, 550)
-
-    a, b = sample_train_data(temp_A, temp_B)
-    print(a.shape, b.shape)

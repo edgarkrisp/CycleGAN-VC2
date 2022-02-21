@@ -24,7 +24,7 @@ def load_pickle_file(fileName):
 
 
 def preprocess_for_training(train_A_dir, train_B_dir, cache_folder):
-    num_mcep = 36
+    num_mcep = 35
     sampling_rate = 16000
     frame_period = 5.0
     n_frames = 128
@@ -40,8 +40,16 @@ def preprocess_for_training(train_A_dir, train_B_dir, cache_folder):
     f0s_B, timeaxes_B, sps_B, aps_B, coded_sps_B = preprocess.world_encode_data(
         wave=wavs_B, fs=sampling_rate, frame_period=frame_period, coded_dim=num_mcep)
 
-    log_f0s_mean_A, log_f0s_std_A = preprocess.logf0_statistics(f0s=f0s_A)
-    log_f0s_mean_B, log_f0s_std_B = preprocess.logf0_statistics(f0s=f0s_B)
+    logf0s_A = preprocess.logf0(f0s_A)
+    logf0s_B = preprocess.logf0(f0s_B)
+
+    log_f0s_mean_A, log_f0s_std_A = preprocess.logf0_statistics(logf0s=logf0s_A)
+    log_f0s_mean_B, log_f0s_std_B = preprocess.logf0_statistics(logf0s=logf0s_B)
+
+    logf0s_A_norm = preprocess.normalize_logf0s(
+        logf0s_A, log_f0s_mean_A, log_f0s_std_A)
+    logf0s_B_norm = preprocess.normalize_logf0s(
+        logf0s_B, log_f0s_mean_B, log_f0s_std_B)
 
     print("Log Pitch A")
     print("Mean: {:.4f}, Std: {:.4f}".format(log_f0s_mean_A, log_f0s_std_A))
@@ -73,8 +81,12 @@ def preprocess_for_training(train_A_dir, train_B_dir, cache_folder):
 
     save_pickle(variable=coded_sps_A_norm,
                 fileName=os.path.join(cache_folder, "coded_sps_A_norm.pickle"))
+    save_pickle(variable=logf0s_A_norm,
+                fileName=os.path.join(cache_folder, "logf0s_A_norm.pickle"))
     save_pickle(variable=coded_sps_B_norm,
                 fileName=os.path.join(cache_folder, "coded_sps_B_norm.pickle"))
+    save_pickle(variable=logf0s_B_norm,
+                fileName=os.path.join(cache_folder, "logf0s_B_norm.pickle"))
 
     end_time = time.time()
     print("Preprocessing finsihed!! see your directory ../cache for cached preprocessed data")
@@ -86,8 +98,8 @@ def preprocess_for_training(train_A_dir, train_B_dir, cache_folder):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='Prepare data for training Cycle GAN using PyTorch')
-    train_A_dir_default = './data/S0913/'
-    train_B_dir_default = './data/gaoxiaosong/'
+    train_A_dir_default = '/shared_data/data/nfs/emo_conversion/datasets/neu2hap_personal/train/neu'
+    train_B_dir_default = '/shared_data/data/nfs/emo_conversion/datasets/neu2hap_personal/train/hap'
     cache_folder_default = './cache/'
 
     parser.add_argument('--train_A_dir', type=str,

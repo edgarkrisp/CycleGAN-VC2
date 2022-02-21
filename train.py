@@ -16,7 +16,7 @@ from trainingDataset import trainingDataset
 from model_tf import Generator, Discriminator
 from tqdm import tqdm
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "3"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "3"
 
 
 class CycleGANTraining(object):
@@ -25,19 +25,23 @@ class CycleGANTraining(object):
                  mcep_normalization,
                  coded_sps_A_norm,
                  coded_sps_B_norm,
+                 logf0s_A_norm,
+                 logf0s_B_norm,
                  model_checkpoint,
                  validation_A_dir,
                  output_A_dir,
                  validation_B_dir,
                  output_B_dir,
                  restart_training_at=None):
+        self.num_mcep = 35
         self.start_epoch = 0
         self.num_epochs = 200000  # 5000
         self.mini_batch_size = 1  # 1
-        self.dataset_A = self.loadPickleFile(coded_sps_A_norm)
-        self.dataset_B = self.loadPickleFile(coded_sps_B_norm)
+        self.dataset_A = self.load_dataset(coded_sps_A_norm, logf0s_A_norm)
+        self.dataset_B = self.load_dataset(coded_sps_B_norm, logf0s_B_norm)
         self.device = torch.device(
             'cuda' if torch.cuda.is_available() else 'cpu')
+        print(self.device)
 
         # Speech Parameters
         logf0s_normalization = np.load(logf0s_normalization)
@@ -143,6 +147,8 @@ class CycleGANTraining(object):
                                                        drop_last=False)
 
             pbar = tqdm(enumerate(train_loader))
+            epoch_cycle_loss_mcep = 0.0
+            epoch_cycle_loss_f0 = 0.0
             for i, (real_A, real_B) in enumerate(train_loader):
                 num_iterations = (n_samples // self.mini_batch_size) * epoch + i
                 # print("iteration no: ", num_iterations, epoch)
@@ -177,12 +183,24 @@ class CycleGANTraining(object):
                 d_fake_cycle_B = self.discriminator_B(cycle_B)
 
                 # Generator Cycle loss
-                cycleLoss = torch.mean(
-                    torch.abs(real_A - cycle_A)) + torch.mean(torch.abs(real_B - cycle_B))
+                cycleLoss_mcep = torch.mean(
+                    torch.abs(real_A[:, :-1] - cycle_A[:, :-1])) + torch.mean(
+                    torch.abs(real_B[:, :-1] - cycle_B[:, :-1]))
+                cycleLoss_f0 = torch.mean(
+                    torch.abs(real_A[:, -1] - cycle_A[:, -1])) + torch.mean(
+                    torch.abs(real_B[:, -1] - cycle_B[:, -1]))
+                cycleLoss = cycleLoss_f0 + cycleLoss_mcep
 
                 # Generator Identity Loss
-                identiyLoss = torch.mean(
-                    torch.abs(real_A - identity_A)) + torch.mean(torch.abs(real_B - identity_B))
+                identiyLoss_mcep = torch.mean(
+                    torch.abs(
+                        real_A[:, :-1] - identity_A[:, :-1])) + torch.mean(
+                    torch.abs(real_B[:, :-1] - identity_B[:, :-1]))
+                identiyLoss_f0 = torch.mean(
+                    torch.abs(
+                        real_A[:, -1] - identity_A[:, -1])) + torch.mean(
+                    torch.abs(real_B[:, -1] - identity_B[:, -1]))
+                identiyLoss = identiyLoss_f0 + identiyLoss_mcep
 
                 # Generator Loss
                 generator_loss_A2B = torch.mean((1 - d_fake_B) ** 2)
@@ -251,6 +269,8 @@ class CycleGANTraining(object):
                 #         self.discriminator_optimizer, name='discriminator')
 
                 self.discriminator_optimizer.step()
+                epoch_cycle_loss_mcep += cycleLoss_mcep
+                epoch_cycle_loss_f0 += cycleLoss_f0
 
                 if (i + 1) % 2 == 0:
                     pbar.set_description(
@@ -261,53 +281,42 @@ class CycleGANTraining(object):
                             d_loss.item(), generator_loss_A2B, generator_loss_B2A, identiyLoss, cycleLoss, d_loss_A,
                             d_loss_B))
 
-            #                 if num_iterations % 50 == 0:
-            #                     store_to_file = "Iter:{}\t Generator Loss:{:.4f} Discrimator Loss:{:.4f} \tGA2B:{:.4f} GB2A:{:.4f} G_id:{:.4f} G_cyc:{:.4f} D_A:{:.4f} D_B:{:.4f}".format(
-            #                         num_iterations, generator_loss.item(), d_loss.item(), generator_loss_A2B, generator_loss_B2A,
-            #                         identiyLoss, cycleLoss, d_loss_A, d_loss_B)
-            #                     print(
-            #                         "Iter:{}\t Generator Loss:{:.4f} Discrimator Loss:{:.4f} \tGA2B:{:.4f} GB2A:{:.4f} G_id:{:.4f} G_cyc:{:.4f} D_A:{:.4f} D_B:{:.4f}".format(
-            #                             num_iterations, generator_loss.item(), d_loss.item(), generator_loss_A2B,
-            #                             generator_loss_B2A, identiyLoss, cycleLoss, d_loss_A, d_loss_B))
-            #                     self.store_to_file(store_to_file)
-
-            #             end_time = time.time()
-            #             store_to_file = "Epoch: {} Generator Loss: {:.4f} Discriminator Loss: {}, Time: {:.2f}\n\n".format(
-            #                 epoch, generator_loss.item(), d_loss.item(), end_time - start_time_epoch)
-            #             self.store_to_file(store_to_file)
-            #             print("Epoch: {} Generator Loss: {:.4f} Discriminator Loss: {}, Time: {:.2f}\n\n".format(
-            #                 epoch, generator_loss.item(), d_loss.item(), end_time - start_time_epoch))
-
-            if epoch % 2000 == 0 and epoch != 0:
+            if epoch % 1 == 0:
                 end_time = time.time()
-                store_to_file = "Epoch: {} Generator Loss: {:.4f} Discriminator Loss: {}, Time: {:.2f}\n\n".format(
-                    epoch, generator_loss.item(), d_loss.item(), end_time - start_time_epoch)
+                store_to_file = "Epoch: {} Generator Loss: {:.4f} " \
+                                "Discriminator Loss: {:.4f}, " \
+                                "Epoch Cycle Loss MCEP: {:.4f}, " \
+                                "Epoch Cycle Loss F0: {:.4f}, " \
+                                " Time: {:.2f}".format(
+                    epoch, generator_loss.item(), d_loss.item(),
+                    epoch_cycle_loss_mcep / n_samples,
+                    epoch_cycle_loss_f0 / n_samples,
+                    end_time - start_time_epoch)
                 self.store_to_file(store_to_file)
+
                 print("Epoch: {} Generator Loss: {:.4f} Discriminator Loss: {}, Time: {:.2f}\n\n".format(
                     epoch, generator_loss.item(), d_loss.item(), end_time - start_time_epoch))
 
+            if epoch % 30 == 0 and epoch > 0:
+                end_time = time.time()
+
                 # Save the Entire model
                 print("Saving model Checkpoint  ......")
-                store_to_file = "Saving model Checkpoint  ......"
-                self.store_to_file(store_to_file)
                 self.saveModelCheckPoint(epoch, '{}'.format(
                     self.modelCheckpoint + '_CycleGAN_CheckPoint'))
                 print("Model Saved!")
 
-            if epoch % 2000 == 0 and epoch != 0:
+            if epoch % 30 == 0 and epoch > 0:
                 # Validation Set
                 validation_start_time = time.time()
                 self.validation_for_A_dir()
                 self.validation_for_B_dir()
                 validation_end_time = time.time()
-                store_to_file = "Time taken for validation Set: {}".format(
-                    validation_end_time - validation_start_time)
-                self.store_to_file(store_to_file)
                 print("Time taken for validation Set: {}".format(
                     validation_end_time - validation_start_time))
 
     def validation_for_A_dir(self):
-        num_mcep = 36
+        num_mcep = self.num_mcep
         sampling_rate = 16000
         frame_period = 5.0
         n_frames = 128
@@ -324,32 +333,38 @@ class CycleGANTraining(object):
                                          multiple=4)
             f0, timeaxis, sp, ap = preprocess.world_decompose(
                 wav=wav, fs=sampling_rate, frame_period=frame_period)
-            f0_converted = preprocess.pitch_conversion(f0=f0,
-                                                       mean_log_src=self.log_f0s_mean_A,
-                                                       std_log_src=self.log_f0s_std_A,
-                                                       mean_log_target=self.log_f0s_mean_B,
-                                                       std_log_target=self.log_f0s_std_B)
+            logf0 = np.log(f0 + 1)
+            logf0_norm = (logf0 - self.log_f0s_mean_A) / self.log_f0s_std_A
             coded_sp = preprocess.world_encode_spectral_envelop(
                 sp=sp, fs=sampling_rate, dim=num_mcep)
             coded_sp_transposed = coded_sp.T
             coded_sp_norm = (coded_sp_transposed -
                              self.coded_sps_A_mean) / self.coded_sps_A_std
             coded_sp_norm = np.array([coded_sp_norm])
+            logf0_norm = logf0_norm.reshape(1, 1, -1)
+            gen_input = np.concatenate((coded_sp_norm, logf0_norm), axis=1)
 
             if torch.cuda.is_available():
-                coded_sp_norm = torch.from_numpy(coded_sp_norm).cuda().float()
+                gen_input = torch.from_numpy(gen_input).cuda().float()
             else:
-                coded_sp_norm = torch.from_numpy(coded_sp_norm).float()
+                gen_input = torch.from_numpy(gen_input).float()
 
-            coded_sp_converted_norm = self.generator_A2B(coded_sp_norm)
-            coded_sp_converted_norm = coded_sp_converted_norm.cpu().detach().numpy()
-            coded_sp_converted_norm = np.squeeze(coded_sp_converted_norm)
+            gen_input_conv = self.generator_A2B(gen_input)
+            gen_input_conv = gen_input_conv.cpu().detach().numpy()
+            gen_input_conv = np.squeeze(gen_input_conv)
+            coded_sp_converted_norm = gen_input_conv[:-1]
+            logf0_converted_norm = gen_input_conv[-1]
+
             coded_sp_converted = coded_sp_converted_norm * \
-                                 self.coded_sps_B_std + self.coded_sps_B_mean
+                self.coded_sps_B_std + self.coded_sps_B_mean
             coded_sp_converted = coded_sp_converted.T
             coded_sp_converted = np.ascontiguousarray(coded_sp_converted)
             decoded_sp_converted = preprocess.world_decode_spectral_envelop(
                 coded_sp=coded_sp_converted, fs=sampling_rate)
+            logf0_converted = \
+                logf0_converted_norm * self.log_f0s_std_B + self.log_f0s_mean_B
+            f0_converted = np.exp(logf0_converted) - 1
+            f0_converted = f0_converted.clip(min=0).astype(np.float64)
             wav_transformed = preprocess.world_speech_synthesis(f0=f0_converted,
                                                                 decoded_sp=decoded_sp_converted,
                                                                 ap=ap,
@@ -360,7 +375,7 @@ class CycleGANTraining(object):
                                      sr=sampling_rate)
 
     def validation_for_B_dir(self):
-        num_mcep = 36
+        num_mcep = self.num_mcep
         sampling_rate = 16000
         frame_period = 5.0
         n_frames = 128
@@ -377,32 +392,38 @@ class CycleGANTraining(object):
                                          multiple=4)
             f0, timeaxis, sp, ap = preprocess.world_decompose(
                 wav=wav, fs=sampling_rate, frame_period=frame_period)
-            f0_converted = preprocess.pitch_conversion(f0=f0,
-                                                       mean_log_src=self.log_f0s_mean_B,
-                                                       std_log_src=self.log_f0s_std_B,
-                                                       mean_log_target=self.log_f0s_mean_A,
-                                                       std_log_target=self.log_f0s_std_A)
+            logf0 = np.log(f0 + 1)
+            logf0_norm = (logf0 - self.log_f0s_mean_B) / self.log_f0s_std_B
             coded_sp = preprocess.world_encode_spectral_envelop(
                 sp=sp, fs=sampling_rate, dim=num_mcep)
             coded_sp_transposed = coded_sp.T
             coded_sp_norm = (coded_sp_transposed -
                              self.coded_sps_B_mean) / self.coded_sps_B_std
             coded_sp_norm = np.array([coded_sp_norm])
+            logf0_norm = logf0_norm.reshape(1, 1, -1)
+            gen_input = np.concatenate((coded_sp_norm, logf0_norm), axis=1)
 
             if torch.cuda.is_available():
-                coded_sp_norm = torch.from_numpy(coded_sp_norm).cuda().float()
+                gen_input = torch.from_numpy(gen_input).cuda().float()
             else:
-                coded_sp_norm = torch.from_numpy(coded_sp_norm).float()
+                gen_input = torch.from_numpy(gen_input).float()
 
-            coded_sp_converted_norm = self.generator_B2A(coded_sp_norm)
-            coded_sp_converted_norm = coded_sp_converted_norm.cpu().detach().numpy()
-            coded_sp_converted_norm = np.squeeze(coded_sp_converted_norm)
+            gen_input_conv = self.generator_A2B(gen_input)
+            gen_input_conv = gen_input_conv.cpu().detach().numpy()
+            gen_input_conv = np.squeeze(gen_input_conv)
+            coded_sp_converted_norm = gen_input_conv[:-1]
+            logf0_converted_norm = gen_input_conv[-1]
+
             coded_sp_converted = coded_sp_converted_norm * \
-                                 self.coded_sps_A_std + self.coded_sps_A_mean
+                 self.coded_sps_A_std + self.coded_sps_A_mean
             coded_sp_converted = coded_sp_converted.T
             coded_sp_converted = np.ascontiguousarray(coded_sp_converted)
             decoded_sp_converted = preprocess.world_decode_spectral_envelop(
                 coded_sp=coded_sp_converted, fs=sampling_rate)
+            logf0_converted = \
+                logf0_converted_norm * self.log_f0s_std_A + self.log_f0s_mean_A
+            f0_converted = np.exp(logf0_converted) - 1
+            f0_converted = f0_converted.clip(min=0).astype(np.float64)
             wav_transformed = preprocess.world_speech_synthesis(f0=f0_converted,
                                                                 decoded_sp=decoded_sp_converted,
                                                                 ap=ap,
@@ -419,6 +440,11 @@ class CycleGANTraining(object):
     def loadPickleFile(self, fileName):
         with open(fileName, 'rb') as f:
             return pickle.load(f)
+
+    def load_dataset(self, mcep_pickle, f0_pickle):
+        mceps = self.loadPickleFile(mcep_pickle)
+        f0s = self.loadPickleFile(f0_pickle)
+        return [np.vstack((x, y)) for x, y in zip(mceps, f0s)]
 
     def store_to_file(self, doc):
         doc = doc + "\n"
@@ -466,15 +492,17 @@ if __name__ == '__main__':
     mcep_normalization_default = './cache/mcep_normalization.npz'
     coded_sps_A_norm = './cache/coded_sps_A_norm.pickle'
     coded_sps_B_norm = './cache/coded_sps_B_norm.pickle'
+    logf0s_A_norm = './cache/logf0s_A_norm.pickle'
+    logf0s_B_norm = './cache/logf0s_B_norm.pickle'
     model_checkpoint = './model_checkpoint/'
-    resume_training_at = './model_checkpoint/_CycleGAN_CheckPoint'
+    resume_training_at = '/home/edgar/dev/CycleGAN-VC2/model_checkpoint/_CycleGAN_CheckPoint'
     #     resume_training_at = None
 
-    validation_A_dir_default = './data/S0913/'
-    output_A_dir_default = './converted_sound/S0913'
+    validation_A_dir_default = '/shared_data/data/nfs/emo_conversion/datasets/neu2hap_personal/train/neu'
+    output_A_dir_default = './converted_sound/neu'
 
-    validation_B_dir_default = './data/gaoxiaosong/'
-    output_B_dir_default = './converted_sound/gaoxiaosong/'
+    validation_B_dir_default = '/shared_data/data/nfs/emo_conversion/datasets/neu2hap_personal/train/hap'
+    output_B_dir_default = './converted_sound/hap'
 
     parser.add_argument('--logf0s_normalization', type=str,
                         help="Cached location for log f0s normalized", default=logf0s_normalization_default)
@@ -484,6 +512,10 @@ if __name__ == '__main__':
                         help="mcep norm for data A", default=coded_sps_A_norm)
     parser.add_argument('--coded_sps_B_norm', type=str,
                         help="mcep norm for data B", default=coded_sps_B_norm)
+    parser.add_argument('--logf0s_A_norm', type=str,
+                        help="log f0 norm for data A", default=logf0s_A_norm)
+    parser.add_argument('--logf0s_B_norm', type=str,
+                        help="log f0 norm for data B", default=logf0s_B_norm)
     parser.add_argument('--model_checkpoint', type=str,
                         help="location where you want to save the model", default=model_checkpoint)
     parser.add_argument('--resume_training_at', type=str,
@@ -504,6 +536,8 @@ if __name__ == '__main__':
     mcep_normalization = argv.mcep_normalization
     coded_sps_A_norm = argv.coded_sps_A_norm
     coded_sps_B_norm = argv.coded_sps_B_norm
+    logf0s_A_norm = argv.logf0s_A_norm
+    logf0s_B_norm = argv.logf0s_B_norm
     model_checkpoint = argv.model_checkpoint
     resume_training_at = argv.resume_training_at
 
@@ -521,6 +555,8 @@ if __name__ == '__main__':
                                 mcep_normalization=mcep_normalization,
                                 coded_sps_A_norm=coded_sps_A_norm,
                                 coded_sps_B_norm=coded_sps_B_norm,
+                                logf0s_A_norm=logf0s_A_norm,
+                                logf0s_B_norm=logf0s_B_norm,
                                 model_checkpoint=model_checkpoint,
                                 validation_A_dir=validation_A_dir,
                                 output_A_dir=output_A_dir,
